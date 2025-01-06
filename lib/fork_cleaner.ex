@@ -11,61 +11,71 @@ defmodule ForkCleaner do
   @yellow "\e[33m"
   @reset "\e[0m"
 
+  def main(args \\ []) do
+    clean_forks()
+  end
+
   def clean_forks() do
     access_token = Application.get_env(:fork_cleaner, :github_token)
     host = Application.get_env(:fork_cleaner, :github_host)
 
     client = Tentacat.Client.new(%{access_token: access_token}, host)
 
-    pulls_task =
-      Task.async(fn ->
-        get_user_pull_requests(client)
-      end)
-
     forks_task =
       Task.async(fn ->
         get_forks(client)
       end)
 
-    forks = Task.await(forks_task)
-    pulls = Task.await(pulls_task) |> MapSet.new()
+    pulls =
+      get_user_pull_requests(client)
+      |> MapSet.new()
 
-    Enum.filter(forks, fn {owner, repo} ->
-      if not MapSet.member?(pulls, {owner, repo}) do
-        true
-      else
-        IO.puts("#{@yellow}Skipping #{owner}/#{repo} because it has open pull requests#{@reset}")
-        false
-      end
-    end)
+    forks =
+      Task.await(forks_task)
+      |> Enum.filter(fn {owner, repo} ->
+        if not MapSet.member?(pulls, {owner, repo}) do
+          true
+        else
+          IO.puts(
+            "#{color("Skipping #{owner}/#{repo} because it has open pull requests", @yellow)}"
+          )
 
-    IO.puts("\nYou have #{@green}#{length(forks)}#{@reset} forks to consider deleting:")
+          false
+        end
+      end)
+
+    IO.puts(
+      "\nYou have #{color(Integer.to_string(length(forks)), @green)} forks to consider deleting:"
+    )
 
     forks
     |> Enum.map(fn {owner, repo} ->
-      IO.puts("#{@yellow}#{owner}/#{repo}#{@reset}")
+      IO.puts(color({owner, repo}))
       {owner, repo}
     end)
     |> Enum.each(fn {owner, repo} ->
       IO.puts(
-        "\nDo you want to delete #{@yellow}#{owner}/#{repo}#{@reset}? (#{@green}y#{@reset}/#{@red}n#{@reset})"
+        "\nDo you want to delete #{color({owner, repo})}? (#{color("y", @green)}/#{color("n", @red)})"
       )
 
       input = IO.gets("") |> String.trim()
 
       if input == "y" do
-        IO.puts("\nDeleting #{@yellow}#{owner}/#{repo}#{@reset}...\n")
+        IO.puts("\nDeleting #{color({owner, repo})}...\n")
 
         case delete_fork(client, {owner, repo}) do
           {:ok} ->
-            IO.puts("#{@green}Deleted fork#{@reset}!\n")
+            IO.puts("#{color("Deleted fork", @green)}!\n")
 
           {:error} ->
-            IO.puts("#{@red}Failed to delete fork#{@reset}.\n")
+            IO.puts("#{color("Failed to delete fork", @red)}!\n")
         end
       end
     end)
   end
+
+  defp color({owner, repo}), do: color("#{owner}/#{repo}", @yellow)
+  defp color(input, color) when is_binary(input), do: "#{color}#{input}#{@reset}"
 
   defp get_forks(client) do
     case Repositories.list_mine(client) do
@@ -97,9 +107,7 @@ defmodule ForkCleaner do
 
     case Search.issues(client, q: "state:open type:pr author:#{user}", sort: "created") do
       {200, pulls, _} ->
-        Enum.map(pulls["items"], fn pull ->
-          get_repo_owner_from_url(pull["repository_url"])
-        end)
+        Enum.map(pulls["items"], &get_repo_owner_from_url(&1["repository_url"]))
 
       _ ->
         IO.puts("Failed to fetch pull requests")

@@ -1,1 +1,1 @@
-ForkCleaner.clean_forks() |> IO.inspect()
+ForkCleaner.clean_forks()
