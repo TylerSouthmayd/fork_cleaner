@@ -1,130 +1,118 @@
 defmodule ForkCleaner do
-  @moduledoc """
-  Documentation for `ForkCleaner`.
-  """
-  alias Tentacat.Repositories
-  alias Tentacat.Search
-  alias Tentacat.Users
-
   @red "\e[31m"
   @green "\e[32m"
   @yellow "\e[33m"
+  @blue "\e[34m"
+  @orange "\e[38;5;208m"
   @reset "\e[0m"
+  @hyperlink_start "\e]8;;"
+  @url_end "\e\\"
+  @hyperlink_end @hyperlink_start <> @url_end
 
-  def main(args \\ []) do
-    clean_forks()
+  def main(_args \\ []) do
+    clean()
   end
 
-  def clean_forks() do
+  def clean() do
+    client = get_client()
+
+    client
+    |> Fork.get_forks()
+    |> print_forks()
+    |> Enum.each(fn fork ->
+      fork
+      |> Fork.with_metadata(client)
+      |> handle_fork_decision(client)
+    end)
+  end
+
+  defp get_client() do
     access_token = Application.get_env(:fork_cleaner, :github_token)
     host = Application.get_env(:fork_cleaner, :github_host)
+    Tentacat.Client.new(%{access_token: access_token}, host)
+  end
 
-    client = Tentacat.Client.new(%{access_token: access_token}, host)
+  defp print_forks(forks) do
+    IO.puts("You have #{color(Integer.to_string(length(forks)), @green)} total forks:")
 
-    forks_task =
-      Task.async(fn ->
-        get_forks(client)
-      end)
+    Enum.each(forks, fn fork ->
+      IO.puts(" * " <> color_link(fork.link, fork.owner_repo, @yellow))
+    end)
 
-    pulls =
-      get_user_pull_requests(client)
-      |> MapSet.new()
-
-    forks =
-      Task.await(forks_task)
-      |> Enum.filter(fn {owner, repo} ->
-        if not MapSet.member?(pulls, {owner, repo}) do
-          true
-        else
-          IO.puts(
-            "#{color("Skipping #{owner}/#{repo} because it has open pull requests", @yellow)}"
-          )
-
-          false
-        end
-      end)
-
-    IO.puts(
-      "\nYou have #{color(Integer.to_string(length(forks)), @green)} forks to consider deleting:"
-    )
+    IO.puts("\n")
 
     forks
-    |> Enum.map(fn {owner, repo} ->
-      IO.puts(color({owner, repo}))
-      {owner, repo}
-    end)
-    |> Enum.each(fn {owner, repo} ->
-      IO.puts(
-        "\nDo you want to delete #{color({owner, repo})}? (#{color("y", @green)}/#{color("n", @red)})"
-      )
+  end
 
-      input = IO.gets("") |> String.trim()
+  defp handle_fork_decision(
+         %Fork{
+           owner_repo: repo,
+           link: link,
+           issue_count: issue_count,
+           pulls: pulls,
+           parent: parent
+         },
+         client
+       ) do
+    IO.puts("""
+    CONSIDERING #{color_link(link, repo, @yellow)} FOR DELETION
 
-      if input == "y" do
-        IO.puts("\nDeleting #{color({owner, repo})}...\n")
+    Upstream repo: #{color_link(parent.link, parent.owner_repo, @blue)}
+    """)
 
-        case delete_fork(client, {owner, repo}) do
-          {:ok} ->
-            IO.puts("#{color("Deleted fork", @green)}!\n")
+    if length(parent.pulls) > 0 do
+      IO.puts("\n#{color("DANGER! You have open pull requests to the upstream repo!", @red)}\n")
+      print_pull_list(parent.pulls, @red)
+    else
+      IO.puts("#{color("No open pull requests to the upstream repo ✓", @green)}")
+    end
 
-          {:error} ->
-            IO.puts("#{color("Failed to delete fork", @red)}!\n")
-        end
+    IO.puts("""
+    \nFork Stats:
+    Open Issue Count: #{color(Integer.to_string(issue_count), count_color(issue_count))}
+    Open Pull Request Count: #{color(Integer.to_string(length(pulls)), count_color(length(pulls)))}
+    """)
+
+    if length(pulls) > 0 do
+      print_pull_list(pulls, @orange)
+    end
+
+    IO.puts("\nDo you want to delete #{color(repo)}? (#{color("y", @green)}/#{color("n", @red)})")
+
+    input = IO.gets("") |> String.trim()
+
+    if input == "y" do
+      IO.puts("\nDeleting #{color(repo)}...\n")
+
+      case Fork.delete_fork(repo, client) do
+        {:ok} ->
+          IO.puts("\n#{color("Deleted fork", @green)}!\n")
+
+        {:error} ->
+          IO.puts("\n#{color("Failed to delete fork", @red)}!\n")
       end
+    else
+      IO.puts("\n#{color("Skipping fork deletion", @red)}\n")
+    end
+  end
+
+  defp print_pull_list(pulls, color) do
+    Enum.each(pulls, fn {title, link} ->
+      IO.puts(" * " <> color_link(link, title, color))
     end)
   end
 
-  defp color({owner, repo}), do: color("#{owner}/#{repo}", @yellow)
-  defp color(input, color) when is_binary(input), do: "#{color}#{input}#{@reset}"
+  defp count_color(count) when count > 0, do: @orange
+  defp count_color(_count), do: @green
 
-  defp get_forks(client) do
-    case Repositories.list_mine(client) do
-      {200, repos, _} ->
-        repos
-        |> Enum.filter(fn repo -> repo["fork"] end)
-        |> Enum.map(fn repo ->
-          String.split(repo["full_name"], "/")
-          |> List.to_tuple()
-        end)
+  defp color_link(link, text, text_color),
+    do: "#{@hyperlink_start}#{link}#{@url_end}#{color(text, text_color)}#{@hyperlink_end}"
 
-      _ ->
-        IO.puts("Failed to fetch repositories")
-    end
-  end
+  defp color({owner, repo}), do: "#{@yellow}#{owner}/#{repo}#{@reset}"
 
-  defp get_username(client) do
-    case Users.me(client) do
-      {200, info, _} ->
-        info["login"]
+  defp color(input, text_color) when is_binary(input),
+    do: "#{text_color}#{input}#{@reset}"
 
-      _ ->
-        IO.puts("Failed to fetch user info")
-    end
-  end
-
-  defp get_user_pull_requests(client) do
-    user = get_username(client)
-
-    case Search.issues(client, q: "state:open type:pr author:#{user}", sort: "created") do
-      {200, pulls, _} ->
-        Enum.map(pulls["items"], &get_repo_owner_from_url(&1["repository_url"]))
-
-      _ ->
-        IO.puts("Failed to fetch pull requests")
-    end
-  end
-
-  defp delete_fork(client, {owner, repo}) do
-    {:ok}
-    # case Repositories.delete(client, owner, repo) do
-    #   {204, _, _} -> {:ok}
-    #   _ -> {:error}
-    # end
-  end
-
-  defp get_repo_owner_from_url(url) do
-    String.split(url, "/")
-    |> Enum.take(-2)
-    |> List.to_tuple()
-  end
+  defp color(input, text_color) when is_tuple(input),
+    do: "#{text_color}#{Tuple.to_list(input) |> Enum.join("/")}#{@reset}"
 end

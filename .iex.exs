@@ -1,1 +1,1 @@
-ForkCleaner.clean_forks()
+ForkCleaner.clean()
