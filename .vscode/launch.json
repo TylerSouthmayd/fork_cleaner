@@ -8,7 +8,9 @@
             "type": "mix_task",
             "name": "mix (Default task)",
             "request": "launch",
-            "projectDir": "${workspaceRoot}"
+            "task": "run",
+            "projectDir": "${workspaceRoot}",
+            "taskArgs": ["-e", "ForkCleaner.clean_forks"]
         },
         {
             "type": "mix_task",
