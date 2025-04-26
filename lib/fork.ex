@@ -1,4 +1,8 @@
 defmodule Fork do
+  @moduledoc """
+  A module for mapping GitHub API sourced data to a struct representing a forked repository.
+  """
+
   alias Tentacat.Repositories
   alias Tentacat.Users
 
@@ -21,11 +25,7 @@ defmodule Fork do
         |> Enum.map(fn repo ->
           link = repo["html_url"]
           user = repo["owner"]["login"]
-
-          {owner, repo_name} =
-            String.split(repo["full_name"], "/")
-            |> List.to_tuple()
-
+          {owner, repo_name} = repo_owner_from_url(repo["full_name"])
           %Fork{owner_repo: {owner, repo_name}, link: link, owner_username: user}
         end)
 
@@ -69,8 +69,8 @@ defmodule Fork do
 
   def delete_fork({owner, repo}, client) do
     case Repositories.delete(client, owner, repo) do
-      {204, _, _} -> {:ok}
-      _ -> {:error}
+      {204, _, _} -> :ok
+      _ -> :error
     end
   end
 
@@ -95,11 +95,7 @@ defmodule Fork do
     end
   end
 
-  defp pull_to_tuple(pull) do
-    title = pull["title"]
-    link = pull["html_url"]
-    {title, link}
-  end
+  defp pull_to_tuple(%{title: title, html_url: link}), do: {title, link}
 
   defp repo_owner_from_url(url) do
     String.split(url, "/")

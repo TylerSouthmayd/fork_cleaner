@@ -1,4 +1,27 @@
 defmodule ForkCleaner do
+  @moduledoc """
+  A module for cleaning up forks on GitHub.
+
+  This module is responsible for fetching forks from the GitHub API,
+  and then cleaning them up by deleting them if they are no longer needed.
+
+  It is designed to be run as an escript, and will prompt the user for confirmation
+  before deleting any forks.
+
+  ## Examples
+
+  ```bash
+  ./fork_cleaner --skip-with-upstream-prs
+  ```
+
+  ## Options
+
+  - `:skip_with_upstream_prs`
+    - Automatically skips forks with open pull requests to the upstream repo.
+    - Defaults to `false`.
+
+  """
+
   @red "\e[31m"
   @green "\e[32m"
   @yellow "\e[33m"
@@ -9,11 +32,12 @@ defmodule ForkCleaner do
   @url_end "\e\\"
   @hyperlink_end @hyperlink_start <> @url_end
 
-  def main(_args \\ []) do
-    clean()
+  def main(args \\ []) do
+    options = parse_args(args)
+    clean(options)
   end
 
-  def clean() do
+  def clean(options \\ []) do
     client = get_client()
 
     client
@@ -22,8 +46,20 @@ defmodule ForkCleaner do
     |> Enum.each(fn fork ->
       fork
       |> Fork.with_metadata(client)
-      |> handle_fork_decision(client)
+      |> handle_fork_decision(client, options)
     end)
+
+    IO.puts("\n#{color("Finished cleaning forks", @green)}\n")
+  end
+
+  defp parse_args(args) do
+    {opts, _, _} =
+      OptionParser.parse(args,
+        strict: [skip_with_upstream_prs: :boolean],
+        aliases: [s: :skip_with_upstream_prs]
+      )
+
+    opts
   end
 
   defp get_client() do
@@ -33,7 +69,7 @@ defmodule ForkCleaner do
   end
 
   defp print_forks(forks) do
-    IO.puts("You have #{color(Integer.to_string(length(forks)), @green)} total forks:")
+    IO.puts("You have #{color(Integer.to_string(length(forks)), @green)} fork(s):")
 
     Enum.each(forks, fn fork ->
       IO.puts(" * " <> color_link(fork.link, fork.owner_repo, @yellow))
@@ -51,33 +87,43 @@ defmodule ForkCleaner do
            issue_count: issue_count,
            pulls: pulls,
            parent: parent
-         },
-         client
+         } = fork,
+         client,
+         options
        ) do
     IO.puts("""
-    CONSIDERING #{color_link(link, repo, @yellow)} FOR DELETION
+    ** CONSIDERING #{color_link(link, repo, @blue)} FOR DELETION **
 
-    Upstream repo: #{color_link(parent.link, parent.owner_repo, @blue)}
-    """)
+    Upstream repo: #{color_link(parent.link, parent.owner_repo, @yellow)}
 
-    if length(parent.pulls) > 0 do
-      IO.puts("\n#{color("DANGER! You have open pull requests to the upstream repo!", @red)}\n")
-      print_pull_list(parent.pulls, @red)
-    else
-      IO.puts("#{color("No open pull requests to the upstream repo ✓", @green)}")
-    end
-
-    IO.puts("""
-    \nFork Stats:
+    Fork Stats:
     Open Issue Count: #{color(Integer.to_string(issue_count), count_color(issue_count))}
     Open Pull Request Count: #{color(Integer.to_string(length(pulls)), count_color(length(pulls)))}
     """)
 
-    if length(pulls) > 0 do
-      print_pull_list(pulls, @orange)
-    end
+    print_pull_list(pulls, @orange)
 
-    IO.puts("\nDo you want to delete #{color(repo)}? (#{color("y", @green)}/#{color("n", @red)})")
+    case List.wrap(parent.pulls) do
+      [] ->
+        IO.puts("#{color("No open pull requests to the upstream repo ✓", @green)}")
+        prompt_fork_deletion(fork, client)
+
+      _ ->
+        IO.puts("\n#{color("DANGER! You have open pull requests to the upstream repo!", @red)}\n")
+        print_pull_list(parent.pulls, @red)
+
+        if Keyword.get(options, :skip_with_upstream_prs, false) do
+          IO.puts("\n#{color("Skipping fork deletion automatically", @orange)}\n")
+        else
+          prompt_fork_deletion(fork, client)
+        end
+    end
+  end
+
+  defp prompt_fork_deletion(%Fork{owner_repo: repo}, client) do
+    IO.puts(
+      "\nDo you want to delete #{color(repo, @blue)}? (#{color("y", @green)}/#{color("n", @red)})"
+    )
 
     input = IO.gets("") |> String.trim()
 
@@ -85,16 +131,18 @@ defmodule ForkCleaner do
       IO.puts("\nDeleting #{color(repo)}...\n")
 
       case Fork.delete_fork(repo, client) do
-        {:ok} ->
+        :ok ->
           IO.puts("\n#{color("Deleted fork", @green)}!\n")
 
-        {:error} ->
+        :error ->
           IO.puts("\n#{color("Failed to delete fork", @red)}!\n")
       end
     else
-      IO.puts("\n#{color("Skipping fork deletion", @red)}\n")
+      IO.puts("\n#{color("Skipping fork deletion", @orange)}\n")
     end
   end
+
+  defp print_pull_list([], _color), do: :ok
 
   defp print_pull_list(pulls, color) do
     Enum.each(pulls, fn {title, link} ->

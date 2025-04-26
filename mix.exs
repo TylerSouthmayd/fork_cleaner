@@ -5,7 +5,7 @@ defmodule ForkCleaner.MixProject do
     [
       app: :fork_cleaner,
       version: "0.1.0",
-      elixir: "~> 1.17",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       escript: [main_module: ForkCleaner]
@@ -20,7 +20,8 @@ defmodule ForkCleaner.MixProject do
 
   defp deps do
     [
-      {:tentacat, "~> 2.0"}
+      {:tentacat, "~> 2.0"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 end
